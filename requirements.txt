@@ -49,3 +49,5 @@ pycocotools>=2.0
 # ClearML dependencies
 clearml>=1.11.0
 clearml-agent>=1.5.0
+
+optuna

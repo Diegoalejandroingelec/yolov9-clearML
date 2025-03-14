@@ -1,0 +1,5 @@
+train: ./data/dataset/train/images
+val: ./data/dataset/valid/images
+test: ./data/dataset/test/images
+nc: 1
+names: ['fish']

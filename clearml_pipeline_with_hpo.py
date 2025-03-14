@@ -1,0 +1,495 @@
+"""
+Enhanced ClearML Pipeline for YOLOv9 Training with Hyperparameter Optimization
+This script creates a complete pipeline that includes:
+1. Dataset versioning and management
+2. Hyperparameter optimization
+3. Model training with optimal hyperparameters
+4. Model evaluation
+5. Model deployment
+"""
+
+import os
+import sys
+from pathlib import Path
+from clearml import Task, Dataset, PipelineController
+from hyperparameter_optimization import create_yolov9_hpo_task, clone_task_for_hpo
+import yaml
+
+# Define the enhanced pipeline
+def create_yolov9_pipeline_with_hpo(
+    project_name="YOLOv9-Pipeline-HPO",
+    pipeline_name="YOLOv9-Training-Pipeline-with-HPO",
+    dataset_name="YOLOv9-Dataset",
+    dataset_project="YOLOv9-Datasets",
+    dataset_path="./yolov9/data/dataset",
+    base_task_project="YOLOv9-Tasks",
+    hpo_project="YOLOv9-HPO",
+    output_uri=None,
+    add_pipeline_tags=None,
+    hpo_max_jobs=10,
+    hpo_concurrent_jobs=2,
+    default_queue="default",
+):
+    """
+    Create a ClearML pipeline for YOLOv9 training with hyperparameter optimization
+    
+    Args:
+        project_name: Name of the pipeline project
+        pipeline_name: Name of the pipeline
+        dataset_name: Name of the dataset
+        dataset_project: Project name for the dataset
+        dataset_path: Path to the dataset
+        base_task_project: Project name for the tasks
+        hpo_project: Project name for hyperparameter optimization
+        output_uri: URI for output artifacts
+        add_pipeline_tags: Additional tags for the pipeline
+        hpo_max_jobs: Maximum number of HPO jobs
+        hpo_concurrent_jobs: Maximum number of concurrent HPO jobs
+        default_queue: Default execution queue for pipeline steps
+    """
+    # Create the pipeline controller
+    pipe = PipelineController(
+        name=pipeline_name,
+        project=project_name,
+        version="1.0",
+        add_pipeline_tags=add_pipeline_tags or ["yolov9", "object-detection", "hpo"],
+        output_uri=output_uri
+    )
+    pipe.set_default_execution_queue(default_queue)
+
+    # Step 1: Dataset Versioning
+    pipe.add_function_step(
+        name="dataset_versioning",
+        function=dataset_versioning,
+        function_kwargs=dict(
+            dataset_name=dataset_name,
+            dataset_project=dataset_project,
+            dataset_path=dataset_path,
+        ),
+        function_return=["dataset_id"],
+        cache_executed_step=False,  # Ensures the step returns a valid node
+        execution_queue=default_queue,
+    )
+
+    # Step 2: Create Base Training Task for HPO
+    pipe.add_function_step(
+        name="create_base_task",
+        parents=["dataset_versioning"],  # Reference parent by step name
+        function=create_base_training_task,
+        function_kwargs=dict(
+            dataset_id="${dataset_versioning.dataset_id}",
+            project_name=base_task_project,
+            task_name="YOLOv9-Base-Training",
+            epochs=5,  # Use fewer epochs for HPO
+            batch_size=16,
+            img_size=640,
+            weights="yolov9-c-converted.pt",
+            device="0",
+        ),
+        function_return=["base_task_id"],
+        cache_executed_step=False,
+        execution_queue=default_queue,
+    )
+
+    # Step 3: Clone Base Task for HPO
+    pipe.add_function_step(
+        name="clone_task_for_hpo",
+        parents=["create_base_task"],  # Reference parent by step name
+        function=clone_task_for_hpo,
+        function_kwargs=dict(
+            base_task_id="${create_base_task.base_task_id}",
+            project_name=hpo_project,
+            task_name="YOLOv9-Base-Task-for-HPO",
+        ),
+        function_return=["cloned_task_id"],
+        cache_executed_step=False,
+        execution_queue=default_queue,
+    )
+
+    # Step 4: Hyperparameter Optimization
+    pipe.add_function_step(
+        name="hyperparameter_optimization",
+        parents=["clone_task_for_hpo", "dataset_versioning"],
+        function=create_yolov9_hpo_task,
+        function_kwargs=dict(
+            project_name=hpo_project,
+            task_name="YOLOv9-Hyperparameter-Optimization",
+            dataset_id="${dataset_versioning.dataset_id}",
+            base_task_id="${clone_task_for_hpo.cloned_task_id}",
+            total_max_jobs=hpo_max_jobs,
+            max_concurrent_jobs=hpo_concurrent_jobs,
+            execution_queue=default_queue,
+        ),
+        function_return=["optimizer"],
+        cache_executed_step=False,
+        execution_queue=default_queue,
+    )
+
+    # Step 5: Get Best Hyperparameters
+    pipe.add_function_step(
+        name="get_best_hyperparameters",
+        parents=["hyperparameter_optimization"],
+        function=get_best_hyperparameters,
+        function_kwargs=dict(
+            optimizer="${hyperparameter_optimization.optimizer}",
+        ),
+        function_return=["best_hyperparameters"],
+        cache_executed_step=False,
+        execution_queue=default_queue,
+    )
+
+    # Step 6: Model Training with Best Hyperparameters
+    pipe.add_function_step(
+        name="model_training",
+        parents=["get_best_hyperparameters", "dataset_versioning"],
+        function=train_yolov9_model_with_best_params,
+        function_kwargs=dict(
+            dataset_id="${dataset_versioning.dataset_id}",
+            project_name=base_task_project,
+            task_name="YOLOv9-Training-Best-Params",
+            best_hyperparameters="${get_best_hyperparameters.best_hyperparameters}",
+            epochs=100,  # Full training with best params
+            weights="yolov9-c-converted.pt",
+            device="0",
+        ),
+        function_return=["trained_model_id"],
+        cache_executed_step=False,
+        execution_queue=default_queue,
+    )
+
+    # Step 7: Model Evaluation
+    pipe.add_function_step(
+        name="model_evaluation",
+        parents=["model_training"],
+        function=evaluate_yolov9_model,
+        function_kwargs=dict(
+            model_id="${model_training.trained_model_id}",
+            project_name=base_task_project,
+            task_name="YOLOv9-Evaluation",
+            img_size=640,
+            batch_size=16,
+            device="0",
+        ),
+        function_return=["evaluation_results"],
+        cache_executed_step=False,
+        execution_queue=default_queue,
+    )
+
+    # Step 8: Model Deployment (if evaluation meets criteria)
+    pipe.add_function_step(
+        name="model_deployment",
+        parents=["model_evaluation"],
+        function=deploy_model_if_improved,
+        function_kwargs=dict(
+            model_id="${model_training.trained_model_id}",
+            evaluation_results="${model_evaluation.evaluation_results}",
+            project_name=base_task_project,
+            min_map_threshold=0.5,  # Minimum mAP to deploy the model
+        ),
+        function_return=["deployment_success"],
+        cache_executed_step=False,
+        execution_queue=default_queue,
+    )
+
+    # Start the pipeline
+    pipe.start(queue=default_queue)
+    
+    return pipe
+
+
+# Step 1: Dataset Versioning Function
+def dataset_versioning(dataset_name, dataset_project, dataset_path):
+    """
+    Create a versioned dataset in ClearML
+    
+    Args:
+        dataset_name: Name of the dataset
+        dataset_project: Project name for the dataset
+        dataset_path: Path to the dataset
+        
+    Returns:
+        dataset_id: ID of the created dataset
+    """
+    task = Task.init(
+        project_name=dataset_project,
+        task_name=f"Dataset Versioning - {dataset_name}",
+        task_type="data_processing",
+        reuse_last_task_id=False
+    )
+    
+    dataset = Dataset.create(
+        dataset_name=dataset_name,
+        dataset_project=dataset_project
+    )
+    dataset.add_files(dataset_path)
+    dataset.finalize()
+    
+    dataset_id = dataset.id
+    task.close()
+    
+    return {"dataset_id": dataset_id}
+
+
+# Step 2: Create Base Training Task
+def create_base_training_task(dataset_id, project_name, task_name, epochs, batch_size, img_size, weights, device):
+    """
+    Create a base training task for hyperparameter optimization.
+    """
+    task = Task.init(
+        project_name=project_name,
+        task_name=task_name,
+        task_type="training",
+        reuse_last_task_id=False
+    )
+    
+    dataset = Dataset.get(dataset_id=dataset_id)
+    dataset_path = dataset.get_local_copy()
+    
+    params = {
+        "Args/epochs": epochs,
+        "Args/batch_size": batch_size,
+        "Args/img_size": img_size,
+        "Args/weights": weights,
+        "Args/device": device,
+        "Args/dataset_path": dataset_path,
+    }
+    task.connect(params)
+    task.close()
+    
+    return {"base_task_id": task.id}
+
+
+# Step 5: Get Best Hyperparameters
+def get_best_hyperparameters(optimizer):
+    """
+    Get the best hyperparameters from the optimizer.
+    """
+    task = Task.init(
+        project_name="YOLOv9-HPO",
+        task_name="Get-Best-Hyperparameters",
+        task_type="data_processing",
+        reuse_last_task_id=False
+    )
+    
+    optimizer.wait()
+    top_exp = optimizer.get_top_experiments(top_k=1)[0]
+    
+    best_hyperparameters = {
+        "lr0": top_exp.get_parameter_value("Args/lr0"),
+        "batch_size": top_exp.get_parameter_value("Args/batch_size"),
+        "img_size": top_exp.get_parameter_value("Args/img_size"),
+        "weight_decay": top_exp.get_parameter_value("Args/weight_decay"),
+        "momentum": top_exp.get_parameter_value("Args/momentum"),
+    }
+    
+    task.get_logger().report_text(
+        "Best hyperparameters found:\n" +
+        "\n".join([f"{k}: {v}" for k, v in best_hyperparameters.items()])
+    )
+    
+    metrics = top_exp.get_last_metrics()
+    task.get_logger().report_text(
+        "Performance metrics of best configuration:\n" +
+        f"mAP50: {metrics['metrics/mAP_0.5']}\n" +
+        f"mAP50-95: {metrics['metrics/mAP_0.5_0.95']}"
+    )
+    
+    task.close()
+    return {"best_hyperparameters": best_hyperparameters}
+
+
+# Step 6: Model Training with Best Hyperparameters
+def train_yolov9_model_with_best_params(dataset_id, project_name, task_name, best_hyperparameters, epochs, weights, device):
+    """
+    Train a YOLOv9 model using the best hyperparameters.
+    """
+    task = Task.init(
+        project_name=project_name,
+        task_name=task_name,
+        task_type="training",
+        reuse_last_task_id=False
+    )
+    
+    dataset = Dataset.get(dataset_id=dataset_id)
+    dataset_path = dataset.get_local_copy()
+    
+    lr0 = best_hyperparameters.get("lr0", 0.01)
+    batch_size = best_hyperparameters.get("batch_size", 16)
+    img_size = best_hyperparameters.get("img_size", 640)
+    weight_decay = best_hyperparameters.get("weight_decay", 0.0005)
+    momentum = best_hyperparameters.get("momentum", 0.937)
+    
+    params = {
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "img_size": img_size,
+        "weights": weights,
+        "device": device,
+        "dataset_path": dataset_path,
+        "lr0": lr0,
+        "weight_decay": weight_decay,
+        "momentum": momentum,
+    }
+    task.connect(params)
+    
+    cwd = os.getcwd()
+    os.chdir(os.path.join(cwd, "yolov9"))
+    
+    data_yaml = os.path.join(dataset_path, "dataset.yaml")
+    custom_hyp_file = os.path.join(cwd, "yolov9", "data", "hyps", f"hyp.custom.{task_name}.yaml")
+    with open("./data/hyps/hyp.scratch-high.yaml", "r") as f:
+        hyp_config = yaml.safe_load(f)
+    
+    hyp_config.update({
+        "lr0": lr0,
+        "weight_decay": weight_decay,
+        "momentum": momentum,
+    })
+    
+    with open(custom_hyp_file, "w") as f:
+        yaml.dump(hyp_config, f)
+    
+    train_cmd = (
+        f"python train_dual.py "
+        f"--workers 8 "
+        f"--device {device} "
+        f"--img {img_size} "
+        f"--batch {batch_size} "
+        f"--epochs {epochs} "
+        f"--data {data_yaml} "
+        f"--cfg ./models/detect/yolov9-c-fish-od.yaml "
+        f"--weights {weights} "
+        f"--name {task_name} "
+        f"--hyp {custom_hyp_file} "
+        f"--min-items 0 "
+        f"--close-mosaic 15"
+    )
+    
+    os.system(train_cmd)
+    trained_model_id = task.id
+    os.chdir(cwd)
+    
+    return {"trained_model_id": trained_model_id}
+
+
+# Step 7: Model Evaluation Function
+def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_size, device):
+    """
+    Evaluate a trained YOLOv9 model.
+    """
+    task = Task.init(
+        project_name=project_name,
+        task_name=task_name,
+        task_type="testing",
+        reuse_last_task_id=False
+    )
+    
+    trained_task = Task.get_task(task_id=model_id)
+    model_path = trained_task.models["output"][-1].get_local_copy()
+    
+    params = {
+        "img_size": img_size,
+        "batch_size": batch_size,
+        "device": device,
+        "model_path": model_path,
+    }
+    task.connect(params)
+    
+    cwd = os.getcwd()
+    os.chdir(os.path.join(cwd, "yolov9"))
+    
+    val_cmd = (
+        f"python val.py "
+        f"--img {img_size} "
+        f"--batch {batch_size} "
+        f"--weights {model_path} "
+        f"--device {device} "
+        f"--task test "  
+        f"--name {task_name} "
+        f"--exist-ok"
+    )
+    
+    import subprocess
+    process = subprocess.Popen(
+        val_cmd.split(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True
+    )
+    stdout, stderr = process.communicate()
+    
+    evaluation_results = {}
+    for line in stdout.split('\n'):
+        if 'all' in line and 'Average Precision' in line:
+            parts = line.split()
+            for i, part in enumerate(parts):
+                if '@0.5' in part:
+                    evaluation_results['mAP50'] = float(parts[i+1])
+                elif '@0.5:0.95' in part:
+                    evaluation_results['mAP50-95'] = float(parts[i+1])
+        elif 'all' in line and 'Precision' in line:
+            parts = line.split()
+            evaluation_results['precision'] = float(parts[-1])
+        elif 'all' in line and 'Recall' in line:
+            parts = line.split()
+            evaluation_results['recall'] = float(parts[-1])
+    
+    for metric_name, metric_value in evaluation_results.items():
+        task.get_logger().report_scalar(
+            title="Evaluation Metrics",
+            series=metric_name,
+            value=metric_value,
+            iteration=0
+        )
+    
+    task.get_logger().report_text("Validation Output:\n" + stdout)
+    if stderr:
+        task.get_logger().report_text("Validation Errors:\n" + stderr)
+    
+    os.chdir(cwd)
+    return {"evaluation_results": evaluation_results}
+
+
+# Step 8: Model Deployment Function
+def deploy_model_if_improved(model_id, evaluation_results, project_name, min_map_threshold=0.5):
+    """
+    Deploy the model if it meets the evaluation criteria.
+    """
+    task = Task.init(
+        project_name=project_name,
+        task_name="Model Deployment",
+        task_type="deployment",
+        reuse_last_task_id=False
+    )
+    
+    if evaluation_results["mAP50"] >= min_map_threshold:
+        trained_task = Task.get_task(task_id=model_id)
+        model_path = trained_task.models["output"][-1].get_local_copy()
+        task.get_logger().report_text(
+            "Model deployed successfully with mAP50 = {:.2f}".format(evaluation_results["mAP50"])
+        )
+        deployment_success = True
+    else:
+        task.get_logger().report_text(
+            "Model did not meet deployment criteria. mAP50 = {:.2f}, threshold = {:.2f}".format(
+                evaluation_results["mAP50"], min_map_threshold
+            )
+        )
+        deployment_success = False
+    
+    return {"deployment_success": deployment_success}
+
+
+if __name__ == "__main__":
+    pipeline = create_yolov9_pipeline_with_hpo(
+        project_name="YOLOv9-Pipeline-HPO",
+        pipeline_name="YOLOv9-Training-Pipeline-with-HPO",
+        dataset_name="YOLOv9-Dataset",
+        dataset_project="YOLOv9-Datasets",
+        dataset_path="./yolov9/data/dataset",
+        base_task_project="YOLOv9-Tasks",
+        hpo_project="YOLOv9-HPO",
+        hpo_max_jobs=10,
+        hpo_concurrent_jobs=2,
+        default_queue="yolov9-queue",
+    )

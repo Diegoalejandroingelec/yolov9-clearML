@@ -1,0 +1,10 @@
+*.jpg
+*.txt
+!requirements.txt
+*.png
+*.jpeg
+*.webp
+*.gif
+*.bmp
+*.pt
+*.zip

@@ -15,37 +15,29 @@ from clearml import Task, Dataset, PipelineController
 from hyperparameter_optimization import create_yolov9_hpo_task, clone_task_for_hpo
 import yaml
 
+
 # Define the enhanced pipeline
 def create_yolov9_pipeline_with_hpo(
     project_name="YOLOv9-Pipeline-HPO",
     pipeline_name="YOLOv9-Training-Pipeline-with-HPO",
     dataset_name="YOLOv9-Dataset",
     dataset_project="YOLOv9-Datasets",
-    dataset_path="./yolov9/data/dataset",
+    dataset_path="/home/diego/Documents/master/S4/AI_studio/yolov9-clearML/yolov9/data/dataset",
     base_task_project="YOLOv9-Tasks",
     hpo_project="YOLOv9-HPO",
     output_uri=None,
     add_pipeline_tags=None,
     hpo_max_jobs=10,
     hpo_concurrent_jobs=2,
-    default_queue="default",
+    pipeline_queue="pipeline-controller-queue",
+    worker_queue="worker-tasks-queue",
 ):
     """
     Create a ClearML pipeline for YOLOv9 training with hyperparameter optimization
     
     Args:
-        project_name: Name of the pipeline project
-        pipeline_name: Name of the pipeline
-        dataset_name: Name of the dataset
-        dataset_project: Project name for the dataset
-        dataset_path: Path to the dataset
-        base_task_project: Project name for the tasks
-        hpo_project: Project name for hyperparameter optimization
-        output_uri: URI for output artifacts
-        add_pipeline_tags: Additional tags for the pipeline
-        hpo_max_jobs: Maximum number of HPO jobs
-        hpo_concurrent_jobs: Maximum number of concurrent HPO jobs
-        default_queue: Default execution queue for pipeline steps
+        pipeline_queue: The queue for the main pipeline controller
+        worker_queue: The queue where child tasks will run
     """
     # Create the pipeline controller
     pipe = PipelineController(
@@ -55,9 +47,11 @@ def create_yolov9_pipeline_with_hpo(
         add_pipeline_tags=add_pipeline_tags or ["yolov9", "object-detection", "hpo"],
         output_uri=output_uri
     )
-    pipe.set_default_execution_queue(default_queue)
+    
+    # Set the execution queue for the pipeline itself
+    pipe.set_default_execution_queue(pipeline_queue)
 
-    # Step 1: Dataset Versioning
+    # Step 1: Dataset Versioning (runs on worker queue)
     pipe.add_function_step(
         name="dataset_versioning",
         function=dataset_versioning,
@@ -67,20 +61,20 @@ def create_yolov9_pipeline_with_hpo(
             dataset_path=dataset_path,
         ),
         function_return=["dataset_id"],
-        cache_executed_step=False,  # Ensures the step returns a valid node
-        execution_queue=default_queue,
+        cache_executed_step=False,
+        execution_queue=worker_queue,  # Run on worker queue
     )
 
-    # Step 2: Create Base Training Task for HPO
+    # Step 2: Create Base Training Task for HPO (worker queue)
     pipe.add_function_step(
         name="create_base_task",
-        parents=["dataset_versioning"],  # Reference parent by step name
+        parents=["dataset_versioning"],
         function=create_base_training_task,
         function_kwargs=dict(
             dataset_id="${dataset_versioning.dataset_id}",
             project_name=base_task_project,
             task_name="YOLOv9-Base-Training",
-            epochs=5,  # Use fewer epochs for HPO
+            epochs=5,
             batch_size=16,
             img_size=640,
             weights="yolov9-c-converted.pt",
@@ -88,13 +82,13 @@ def create_yolov9_pipeline_with_hpo(
         ),
         function_return=["base_task_id"],
         cache_executed_step=False,
-        execution_queue=default_queue,
+        execution_queue=worker_queue,
     )
 
-    # Step 3: Clone Base Task for HPO
+    # Step 3: Clone Base Task for HPO (worker queue)
     pipe.add_function_step(
         name="clone_task_for_hpo",
-        parents=["create_base_task"],  # Reference parent by step name
+        parents=["create_base_task"],
         function=clone_task_for_hpo,
         function_kwargs=dict(
             base_task_id="${create_base_task.base_task_id}",
@@ -103,10 +97,10 @@ def create_yolov9_pipeline_with_hpo(
         ),
         function_return=["cloned_task_id"],
         cache_executed_step=False,
-        execution_queue=default_queue,
+        execution_queue=worker_queue,
     )
 
-    # Step 4: Hyperparameter Optimization
+    # Step 4: Hyperparameter Optimization (worker queue)
     pipe.add_function_step(
         name="hyperparameter_optimization",
         parents=["clone_task_for_hpo", "dataset_versioning"],
@@ -118,14 +112,13 @@ def create_yolov9_pipeline_with_hpo(
             base_task_id="${clone_task_for_hpo.cloned_task_id}",
             total_max_jobs=hpo_max_jobs,
             max_concurrent_jobs=hpo_concurrent_jobs,
-            execution_queue=default_queue,
         ),
         function_return=["optimizer"],
         cache_executed_step=False,
-        execution_queue=default_queue,
+        execution_queue=worker_queue,
     )
 
-    # Step 5: Get Best Hyperparameters
+    # Step 5: Get Best Hyperparameters (worker queue)
     pipe.add_function_step(
         name="get_best_hyperparameters",
         parents=["hyperparameter_optimization"],
@@ -135,10 +128,10 @@ def create_yolov9_pipeline_with_hpo(
         ),
         function_return=["best_hyperparameters"],
         cache_executed_step=False,
-        execution_queue=default_queue,
+        execution_queue=worker_queue,
     )
 
-    # Step 6: Model Training with Best Hyperparameters
+    # Step 6: Model Training with Best Hyperparameters (worker queue)
     pipe.add_function_step(
         name="model_training",
         parents=["get_best_hyperparameters", "dataset_versioning"],
@@ -148,16 +141,16 @@ def create_yolov9_pipeline_with_hpo(
             project_name=base_task_project,
             task_name="YOLOv9-Training-Best-Params",
             best_hyperparameters="${get_best_hyperparameters.best_hyperparameters}",
-            epochs=100,  # Full training with best params
+            epochs=100,
             weights="yolov9-c-converted.pt",
             device="0",
         ),
         function_return=["trained_model_id"],
         cache_executed_step=False,
-        execution_queue=default_queue,
+        execution_queue=worker_queue,
     )
 
-    # Step 7: Model Evaluation
+    # Step 7: Model Evaluation (worker queue)
     pipe.add_function_step(
         name="model_evaluation",
         parents=["model_training"],
@@ -172,10 +165,10 @@ def create_yolov9_pipeline_with_hpo(
         ),
         function_return=["evaluation_results"],
         cache_executed_step=False,
-        execution_queue=default_queue,
+        execution_queue=worker_queue,
     )
 
-    # Step 8: Model Deployment (if evaluation meets criteria)
+    # Step 8: Model Deployment (pipeline queue, since it involves decision-making)
     pipe.add_function_step(
         name="model_deployment",
         parents=["model_evaluation"],
@@ -184,18 +177,17 @@ def create_yolov9_pipeline_with_hpo(
             model_id="${model_training.trained_model_id}",
             evaluation_results="${model_evaluation.evaluation_results}",
             project_name=base_task_project,
-            min_map_threshold=0.5,  # Minimum mAP to deploy the model
+            min_map_threshold=0.5,
         ),
         function_return=["deployment_success"],
         cache_executed_step=False,
-        execution_queue=default_queue,
+        execution_queue=worker_queue,  # Deployment runs in the pipeline queue
     )
 
     # Start the pipeline
-    pipe.start(queue=default_queue)
-    
-    return pipe
+    pipe.start(queue=pipeline_queue)
 
+    return pipe
 
 # Step 1: Dataset Versioning Function
 def dataset_versioning(dataset_name, dataset_project, dataset_path):
@@ -221,12 +213,20 @@ def dataset_versioning(dataset_name, dataset_project, dataset_path):
         dataset_name=dataset_name,
         dataset_project=dataset_project
     )
+    
+    print("Adding dataset files...")
     dataset.add_files(dataset_path)
+
+    print("Uploading dataset files to ClearML storage...")
+    dataset.upload()  
+
+    print("Finalizing dataset version...")
     dataset.finalize()
     
     dataset_id = dataset.id
     task.close()
     
+    print(f"Dataset versioning completed. Dataset ID: {dataset_id}")
     return {"dataset_id": dataset_id}
 
 
@@ -486,10 +486,11 @@ if __name__ == "__main__":
         pipeline_name="YOLOv9-Training-Pipeline-with-HPO",
         dataset_name="YOLOv9-Dataset",
         dataset_project="YOLOv9-Datasets",
-        dataset_path="./yolov9/data/dataset",
+        dataset_path="/home/diego/Documents/master/S4/AI_studio/yolov9-clearML/yolov9/data/dataset",
         base_task_project="YOLOv9-Tasks",
         hpo_project="YOLOv9-HPO",
         hpo_max_jobs=10,
         hpo_concurrent_jobs=2,
-        default_queue="yolov9-queue",
+        pipeline_queue="pipeline-controller-queue",
+        worker_queue="worker-tasks-queue",
     )

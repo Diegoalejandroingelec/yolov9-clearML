@@ -241,6 +241,8 @@ def create_base_training_task(dataset_id, project_name, task_name, epochs, batch
     """
     Create a base training task for hyperparameter optimization.
     """
+    print("Creating base training task... ")
+    
     task = Task.init(
         project_name=project_name,
         task_name=task_name,
@@ -248,6 +250,7 @@ def create_base_training_task(dataset_id, project_name, task_name, epochs, batch
         reuse_last_task_id=False
     )
     
+    print(f"Dataset ID: {dataset_id}")
     # Directly use the dataset_id passed in from the pipeline
     dataset = Dataset.get(dataset_id=dataset_id)
     dataset_path = dataset.get_local_copy()

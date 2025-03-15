@@ -68,18 +68,18 @@ def create_yolov9_pipeline_with_hpo(
     pipe.set_default_execution_queue(pipeline_queue)
 
     # Step 1: Dataset Versioning (runs on worker queue)
-    # pipe.add_function_step(
-    #     name="dataset_versioning",
-    #     function=dataset_versioning,
-    #     function_kwargs=dict(
-    #         dataset_name=dataset_name,
-    #         dataset_project=dataset_project,
-    #         dataset_path=dataset_path,
-    #     ),
-    #     function_return=["dataset_id"],
-    #     cache_executed_step=False,
-    #     execution_queue=worker_queue,  # Run on worker queue
-    # )
+    pipe.add_function_step(
+        name="dataset_versioning",
+        function=dataset_versioning,
+        function_kwargs=dict(
+            dataset_name=dataset_name,
+            dataset_project=dataset_project,
+            dataset_path=dataset_path,
+        ),
+        function_return=["dataset_id"],
+        cache_executed_step=False,
+        execution_queue=worker_queue,  # Run on worker queue
+    )
 
     # Step 2: Create Base Training Task for HPO (worker queue)
     pipe.add_function_step(
@@ -228,28 +228,29 @@ def dataset_versioning(dataset_name, dataset_project, dataset_path):
         reuse_last_task_id=False
     )
     
-    dataset = Dataset.create(
-        dataset_name=dataset_name,
-        dataset_project=dataset_project
-    )
+    # dataset = Dataset.create(
+    #     dataset_name=dataset_name,
+    #     dataset_project=dataset_project
+    # )
     
-    print("Adding dataset files...")
-    dataset.add_files(dataset_path)
+    # print("Adding dataset files...")
+    # dataset.add_files(dataset_path)
 
-    print("Uploading dataset files to ClearML storage...")
-    dataset.upload()  # Ensure files are uploaded before finalizing
+    # print("Uploading dataset files to ClearML storage...")
+    # dataset.upload()  # Ensure files are uploaded before finalizing
 
-    print("Finalizing dataset version...")
-    dataset.finalize()
+    # print("Finalizing dataset version...")
+    # dataset.finalize()
     
-    dataset_id = dataset.id
+    # dataset_id = dataset.id
 
-    # Store dataset_id as an artifact so it can be used later
-    task.upload_artifact(name="dataset_id", artifact_object=dataset_id)
+    # # Store dataset_id as an artifact so it can be used later
+    # task.upload_artifact(name="dataset_id", artifact_object=dataset_id)
 
     task.close()
     
-    print(f"Dataset versioning completed. Dataset ID: {dataset_id}")
+    # print(f"Dataset versioning completed. Dataset ID: {dataset_id}")
+    dataset_id = '123'
     return dataset_id
 
 

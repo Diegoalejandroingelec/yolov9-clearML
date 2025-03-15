@@ -42,6 +42,19 @@ def create_yolov9_pipeline_with_hpo(
         pipeline_queue: The queue for the main pipeline controller
         worker_queue: The queue where child tasks will run
     """
+
+
+
+    # Set up the YOLOv9 training environment
+    yolov9_dir = os.path.dirname(os.path.abspath(__file__)) + "/yolov9"
+    print(yolov9_dir)
+    sys.path.append(yolov9_dir)
+
+    # Import training modules from YOLOv9
+    from yolov9.train_dual import train  
+    from yolov9.utils.general import increment_path
+    from yolov9.utils.callbacks import Callbacks
+
     # Create the pipeline controller
     pipe = PipelineController(
         name=pipeline_name,
@@ -55,18 +68,18 @@ def create_yolov9_pipeline_with_hpo(
     pipe.set_default_execution_queue(pipeline_queue)
 
     # Step 1: Dataset Versioning (runs on worker queue)
-    pipe.add_function_step(
-        name="dataset_versioning",
-        function=dataset_versioning,
-        function_kwargs=dict(
-            dataset_name=dataset_name,
-            dataset_project=dataset_project,
-            dataset_path=dataset_path,
-        ),
-        function_return=["dataset_id"],
-        cache_executed_step=False,
-        execution_queue=worker_queue,  # Run on worker queue
-    )
+    # pipe.add_function_step(
+    #     name="dataset_versioning",
+    #     function=dataset_versioning,
+    #     function_kwargs=dict(
+    #         dataset_name=dataset_name,
+    #         dataset_project=dataset_project,
+    #         dataset_path=dataset_path,
+    #     ),
+    #     function_return=["dataset_id"],
+    #     cache_executed_step=False,
+    #     execution_queue=worker_queue,  # Run on worker queue
+    # )
 
     # Step 2: Create Base Training Task for HPO (worker queue)
     pipe.add_function_step(
@@ -83,6 +96,8 @@ def create_yolov9_pipeline_with_hpo(
             weights="./yolov9/weights/yolov9-c-converted.pt",
         ),
         function_return=["base_task_id"],
+        helper_functions=[train,
+                          increment_path],
         cache_executed_step=False,
         execution_queue=worker_queue,
     )
@@ -299,7 +314,7 @@ def create_base_training_task(dataset_id,
     task.connect(params)
 
     # Set up the YOLOv9 training environment
-    yolov9_dir = f"{base_path}/yolov9"
+    yolov9_dir = os.path.dirname(os.path.abspath(__file__)) + "/yolov9"
     print(yolov9_dir)
     sys.path.append(yolov9_dir)
 

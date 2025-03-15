@@ -249,7 +249,8 @@ def create_base_training_task(dataset_id,
     Create a base training task for hyperparameter optimization.
     """
     print("Creating base training task...", flush=True)
-
+    
+    print(f"Initializing ClearML training task for project: {project_name}, task: {task_name}", flush=True)
     task = Task.init(
         project_name=project_name,
         task_name=task_name,
@@ -257,11 +258,14 @@ def create_base_training_task(dataset_id,
         reuse_last_task_id=False
     )
     
-    print(f"Dataset ID: {dataset_id}",flush=True)
-
-    # Directly use the dataset_id passed in from the pipeline
+    print(f"Received Dataset ID: {dataset_id}", flush=True)
+    
+    print("Fetching dataset from ClearML...", flush=True)
     dataset = Dataset.get(dataset_id=dataset_id)
+    
+    print("Retrieving local copy of dataset...", flush=True)
     dataset_path = dataset.get_local_copy()
+    print(f"Local dataset path: {dataset_path}", flush=True)
     
     params = {
         "Args/epochs": epochs,
@@ -271,10 +275,16 @@ def create_base_training_task(dataset_id,
         "Args/device": device,
         "Args/dataset_path": dataset_path,
     }
+    print(f"Connecting parameters to the task: {params}", flush=True)
     task.connect(params)
+    
+    print("Closing task...", flush=True)
     task.close()
+    
     base_task_id = task.id
+    print(f"Base training task created successfully with Task ID: {base_task_id}", flush=True)
     return base_task_id
+
 
 
 
@@ -284,6 +294,7 @@ def get_best_hyperparameters(optimizer):
     """
     Get the best hyperparameters from the optimizer.
     """
+    print("Initializing task for getting best hyperparameters...", flush=True)
     task = Task.init(
         project_name="YOLOv9-HPO",
         task_name="Get-Best-Hyperparameters",
@@ -291,8 +302,12 @@ def get_best_hyperparameters(optimizer):
         reuse_last_task_id=False
     )
     
+    print("Waiting for optimizer to finish...", flush=True)
     optimizer.wait()
+    
+    print("Retrieving top experiment from optimizer...", flush=True)
     top_exp = optimizer.get_top_experiments(top_k=1)[0]
+    print("Top experiment retrieved.", flush=True)
     
     best_hyperparameters = {
         "lr0": top_exp.get_parameter_value("Args/lr0"),
@@ -301,21 +316,27 @@ def get_best_hyperparameters(optimizer):
         "weight_decay": top_exp.get_parameter_value("Args/weight_decay"),
         "momentum": top_exp.get_parameter_value("Args/momentum"),
     }
+    print(f"Best hyperparameters: {best_hyperparameters}", flush=True)
     
-    task.get_logger().report_text(
-        "Best hyperparameters found:\n" +
-        "\n".join([f"{k}: {v}" for k, v in best_hyperparameters.items()])
-    )
+    report_text = "Best hyperparameters found:\n" + "\n".join([f"{k}: {v}" for k, v in best_hyperparameters.items()])
+    print(report_text, flush=True)
+    task.get_logger().report_text(report_text)
     
+    print("Retrieving performance metrics for the best configuration...", flush=True)
     metrics = top_exp.get_last_metrics()
-    task.get_logger().report_text(
+    metrics_report = (
         "Performance metrics of best configuration:\n" +
         f"mAP50: {metrics['metrics/mAP_0.5']}\n" +
         f"mAP50-95: {metrics['metrics/mAP_0.5_0.95']}"
     )
+    print(metrics_report, flush=True)
+    task.get_logger().report_text(metrics_report)
     
+    print("Closing the best hyperparameters task...", flush=True)
     task.close()
+    
     return best_hyperparameters
+
 
 
 # Step 6: Model Training with Best Hyperparameters
@@ -323,6 +344,7 @@ def train_yolov9_model_with_best_params(dataset_id, project_name, task_name, bes
     """
     Train a YOLOv9 model using the best hyperparameters.
     """
+    print("Initializing training task...", flush=True)
     task = Task.init(
         project_name=project_name,
         task_name=task_name,
@@ -330,8 +352,11 @@ def train_yolov9_model_with_best_params(dataset_id, project_name, task_name, bes
         reuse_last_task_id=False
     )
     
+    print(f"Fetching dataset with ID: {dataset_id}", flush=True)
     dataset = Dataset.get(dataset_id=dataset_id)
+    print("Retrieving local copy of the dataset...", flush=True)
     dataset_path = dataset.get_local_copy()
+    print(f"Dataset local path: {dataset_path}", flush=True)
     
     lr0 = best_hyperparameters.get("lr0", 0.01)
     batch_size = best_hyperparameters.get("batch_size", 16)
@@ -350,22 +375,32 @@ def train_yolov9_model_with_best_params(dataset_id, project_name, task_name, bes
         "weight_decay": weight_decay,
         "momentum": momentum,
     }
+    print("Connecting parameters to the task:", params, flush=True)
     task.connect(params)
     
     cwd = os.getcwd()
-    os.chdir(os.path.join(cwd, "yolov9"))
+    print(f"Current working directory: {cwd}", flush=True)
+    yolov9_dir = os.path.join(cwd, "yolov9")
+    print(f"Changing directory to: {yolov9_dir}", flush=True)
+    os.chdir(yolov9_dir)
     
     data_yaml = os.path.join(dataset_path, "dataset.yaml")
     custom_hyp_file = os.path.join(cwd, "yolov9", "data", "hyps", f"hyp.custom.{task_name}.yaml")
+    print(f"Data yaml path: {data_yaml}", flush=True)
+    print(f"Custom hyperparameter file will be written to: {custom_hyp_file}", flush=True)
+    
+    print("Loading base hyperparameter configuration from './data/hyps/hyp.scratch-high.yaml'...", flush=True)
     with open("./data/hyps/hyp.scratch-high.yaml", "r") as f:
         hyp_config = yaml.safe_load(f)
     
+    print("Updating hyperparameter configuration with best hyperparameters...", flush=True)
     hyp_config.update({
         "lr0": lr0,
         "weight_decay": weight_decay,
         "momentum": momentum,
     })
     
+    print("Writing updated hyperparameter configuration to custom hyp file...", flush=True)
     with open(custom_hyp_file, "w") as f:
         yaml.dump(hyp_config, f)
     
@@ -384,12 +419,17 @@ def train_yolov9_model_with_best_params(dataset_id, project_name, task_name, bes
         f"--min-items 0 "
         f"--close-mosaic 15"
     )
-    
+    print(f"Executing training command:\n{train_cmd}", flush=True)
     os.system(train_cmd)
+    
     trained_model_id = task.id
+    print(f"Training task completed. Task ID (trained model id): {trained_model_id}", flush=True)
+    
+    print(f"Changing back to original directory: {cwd}", flush=True)
     os.chdir(cwd)
     
     return trained_model_id
+
 
 
 # Step 7: Model Evaluation Function
@@ -397,6 +437,7 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
     """
     Evaluate a trained YOLOv9 model.
     """
+    print("Initializing evaluation task...", flush=True)
     task = Task.init(
         project_name=project_name,
         task_name=task_name,
@@ -404,8 +445,15 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
         reuse_last_task_id=False
     )
     
+    print(f"Fetching trained task with model ID: {model_id}", flush=True)
     trained_task = Task.get_task(task_id=model_id)
-    model_path = trained_task.models["output"][-1].get_local_copy()
+    
+    print("Retrieving model from trained task's output artifacts...", flush=True)
+    model_output_list = trained_task.models["output"]
+    print(f"Number of model outputs found: {len(model_output_list)}", flush=True)
+    
+    model_path = model_output_list[-1].get_local_copy()
+    print(f"Model local path: {model_path}", flush=True)
     
     params = {
         "img_size": img_size,
@@ -413,10 +461,14 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
         "device": device,
         "model_path": model_path,
     }
+    print("Connecting parameters to evaluation task:", params, flush=True)
     task.connect(params)
     
     cwd = os.getcwd()
-    os.chdir(os.path.join(cwd, "yolov9"))
+    print(f"Current working directory: {cwd}", flush=True)
+    yolov9_dir = os.path.join(cwd, "yolov9")
+    print(f"Changing directory to: {yolov9_dir}", flush=True)
+    os.chdir(yolov9_dir)
     
     val_cmd = (
         f"python val.py "
@@ -428,6 +480,7 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
         f"--name {task_name} "
         f"--exist-ok"
     )
+    print(f"Executing validation command:\n{val_cmd}", flush=True)
     
     import subprocess
     process = subprocess.Popen(
@@ -438,6 +491,8 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
     )
     stdout, stderr = process.communicate()
     
+    print("Validation command completed.", flush=True)
+    print("Parsing evaluation results...", flush=True)
     evaluation_results = {}
     for line in stdout.split('\n'):
         if 'all' in line and 'Average Precision' in line:
@@ -454,7 +509,10 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
             parts = line.split()
             evaluation_results['recall'] = float(parts[-1])
     
+    print("Evaluation results parsed:", evaluation_results, flush=True)
+    
     for metric_name, metric_value in evaluation_results.items():
+        print(f"Reporting metric: {metric_name} with value: {metric_value}", flush=True)
         task.get_logger().report_scalar(
             title="Evaluation Metrics",
             series=metric_name,
@@ -462,12 +520,17 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
             iteration=0
         )
     
+    print("Reporting validation output and errors (if any)...", flush=True)
     task.get_logger().report_text("Validation Output:\n" + stdout)
     if stderr:
         task.get_logger().report_text("Validation Errors:\n" + stderr)
     
+    print("Changing back to original directory...", flush=True)
     os.chdir(cwd)
-    return  evaluation_results
+    print("Evaluation task completed.", flush=True)
+    
+    return evaluation_results
+
 
 
 # Step 8: Model Deployment Function
@@ -475,6 +538,7 @@ def deploy_model_if_improved(model_id, evaluation_results, project_name, min_map
     """
     Deploy the model if it meets the evaluation criteria.
     """
+    print("Initializing deployment task...", flush=True)
     task = Task.init(
         project_name=project_name,
         task_name="Model Deployment",
@@ -482,22 +546,33 @@ def deploy_model_if_improved(model_id, evaluation_results, project_name, min_map
         reuse_last_task_id=False
     )
     
-    if evaluation_results["mAP50"] >= min_map_threshold:
+    mAP50 = evaluation_results.get("mAP50", 0)
+    print(f"Evaluation results received: mAP50 = {mAP50}, threshold = {min_map_threshold}", flush=True)
+    
+    if mAP50 >= min_map_threshold:
+        print("Deployment criteria met. Proceeding to deploy the model...", flush=True)
         trained_task = Task.get_task(task_id=model_id)
-        model_path = trained_task.models["output"][-1].get_local_copy()
-        task.get_logger().report_text(
-            "Model deployed successfully with mAP50 = {:.2f}".format(evaluation_results["mAP50"])
-        )
+        print("Fetching model output from the trained task...", flush=True)
+        model_output_list = trained_task.models["output"]
+        print(f"Number of model outputs: {len(model_output_list)}", flush=True)
+        model_path = model_output_list[-1].get_local_copy()
+        print(f"Retrieved model local path: {model_path}", flush=True)
+        
+        deploy_message = "Model deployed successfully with mAP50 = {:.2f}".format(mAP50)
+        print(deploy_message, flush=True)
+        task.get_logger().report_text(deploy_message)
         deployment_success = True
     else:
-        task.get_logger().report_text(
-            "Model did not meet deployment criteria. mAP50 = {:.2f}, threshold = {:.2f}".format(
-                evaluation_results["mAP50"], min_map_threshold
-            )
+        not_deployed_message = "Model did not meet deployment criteria. mAP50 = {:.2f}, threshold = {:.2f}".format(
+            mAP50, min_map_threshold
         )
+        print(not_deployed_message, flush=True)
+        task.get_logger().report_text(not_deployed_message)
         deployment_success = False
     
-    return  deployment_success
+    print("Deployment task completed.", flush=True)
+    return deployment_success
+
 
 
 

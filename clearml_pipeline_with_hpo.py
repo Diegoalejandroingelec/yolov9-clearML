@@ -233,16 +233,23 @@ def dataset_versioning(dataset_name, dataset_project, dataset_path):
     task.close()
     
     print(f"Dataset versioning completed. Dataset ID: {dataset_id}")
-    return {"dataset_id": dataset_id}
+    return dataset_id
 
 
 # Step 2: Create Base Training Task
-def create_base_training_task(dataset_id, project_name, task_name, epochs, batch_size, img_size, weights, device):
+def create_base_training_task(dataset_id,
+                              project_name,
+                              task_name,
+                              epochs,
+                              batch_size,
+                              img_size,
+                              weights,
+                              device):
     """
     Create a base training task for hyperparameter optimization.
     """
-    print("Creating base training task... ")
-    
+    print("Creating base training task...", flush=True)
+
     task = Task.init(
         project_name=project_name,
         task_name=task_name,
@@ -250,7 +257,8 @@ def create_base_training_task(dataset_id, project_name, task_name, epochs, batch
         reuse_last_task_id=False
     )
     
-    print(f"Dataset ID: {dataset_id}")
+    print(f"Dataset ID: {dataset_id}",flush=True)
+
     # Directly use the dataset_id passed in from the pipeline
     dataset = Dataset.get(dataset_id=dataset_id)
     dataset_path = dataset.get_local_copy()
@@ -265,8 +273,8 @@ def create_base_training_task(dataset_id, project_name, task_name, epochs, batch
     }
     task.connect(params)
     task.close()
-    
-    return {"base_task_id": task.id}
+    base_task_id = task.id
+    return base_task_id
 
 
 
@@ -307,7 +315,7 @@ def get_best_hyperparameters(optimizer):
     )
     
     task.close()
-    return {"best_hyperparameters": best_hyperparameters}
+    return best_hyperparameters
 
 
 # Step 6: Model Training with Best Hyperparameters
@@ -381,7 +389,7 @@ def train_yolov9_model_with_best_params(dataset_id, project_name, task_name, bes
     trained_model_id = task.id
     os.chdir(cwd)
     
-    return {"trained_model_id": trained_model_id}
+    return trained_model_id
 
 
 # Step 7: Model Evaluation Function
@@ -459,7 +467,7 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
         task.get_logger().report_text("Validation Errors:\n" + stderr)
     
     os.chdir(cwd)
-    return {"evaluation_results": evaluation_results}
+    return  evaluation_results
 
 
 # Step 8: Model Deployment Function
@@ -489,7 +497,7 @@ def deploy_model_if_improved(model_id, evaluation_results, project_name, min_map
         )
         deployment_success = False
     
-    return {"deployment_success": deployment_success}
+    return  deployment_success
 
 
 

@@ -4,6 +4,7 @@ import sys
 import os
 
 yolov9_dir = os.path.dirname(os.path.abspath(__file__)) + "/yolov9"
+print(yolov9_dir)
 sys.path.append(yolov9_dir)
 
 from yolov9.train_dual import train  
@@ -20,7 +21,7 @@ opt.batch_size = 4                               # Batch size
 opt.weights = "./yolov9/weights/yolov9-c-converted.pt"    # Initial weights path
 opt.cfg = "./yolov9/models/detect/yolov9-c-fish-od.yaml"  # Model configuration file
 opt.hyp = "./yolov9/data/hyps/hyp.scratch-high.yaml"      # Hyperparameters file
-opt.data = "./yolov9/data/dataset.yaml"                 # Dataset configuration file
+opt.data = "./yolov9/data/dataset/dataset.yaml"                 # Dataset configuration file
 opt.noval = False
 opt.nosave = False
 opt.workers = 8
@@ -49,7 +50,7 @@ opt.min_items = 0
 opt.multi_scale = False
 # Set up the device (for example, use CUDA if available)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+print(device)
 # Optionally, instantiate your callbacks if needed:
 # from utils.callbacks import Callbacks
 # callbacks = Callbacks()

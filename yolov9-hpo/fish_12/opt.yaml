@@ -1,0 +1,65 @@
+name: fish_1
+project: yolov9-hpo
+save_dir: yolov9-hpo/fish_12
+epochs: 1
+batch_size: 4
+weights: ./yolov9/weights/yolov9-c-converted.pt
+cfg: ./yolov9/models/detect/yolov9-c-fish-od.yaml
+hyp:
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.1
+  box: 7.5
+  cls: 0.5
+  cls_pw: 1.0
+  obj: 0.7
+  obj_pw: 1.0
+  dfl: 1.5
+  iou_t: 0.2
+  anchor_t: 5.0
+  fl_gamma: 0.0
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.9
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.15
+  copy_paste: 0.3
+data: ./yolov9/data/dataset.yaml
+noval: false
+nosave: false
+workers: 8
+freeze:
+- 0
+rect: false
+image_weights: false
+single_cls: false
+evolve: false
+noautoanchor: false
+noplots: false
+cos_lr: false
+flat_cos_lr: false
+fixed_lr: false
+label_smoothing: 0.0
+patience: 100
+save_period: -1
+seed: 0
+resume: false
+imgsz: 640
+optimizer: SGD
+sync_bn: false
+cache: null
+close_mosaic: 15
+quad: false
+min_items: 0
+multi_scale: false

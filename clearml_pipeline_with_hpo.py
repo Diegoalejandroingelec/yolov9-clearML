@@ -80,8 +80,7 @@ def create_yolov9_pipeline_with_hpo(
             epochs=5,
             batch_size=4,
             img_size=640,
-            weights="yolov9-c-converted.pt",
-            device="0",
+            weights="./yolov9/weights/yolov9-c-converted.pt",
         ),
         function_return=["base_task_id"],
         cache_executed_step=False,
@@ -246,47 +245,140 @@ def create_base_training_task(dataset_id,
                               epochs,
                               batch_size,
                               img_size,
-                              weights,
-                              device):
+                              weights):
     """
-    Create a base training task for hyperparameter optimization.
-    """
-    print("Creating base training task...", flush=True)
+    Create a base training task for hyperparameter optimization using the direct YOLOv9
+    training function. This function:
+      - Retrieves the dataset and its local copy.
+      - Sets up the training options (simulating command-line arguments).
+      - Changes directory to the YOLOv9 folder.
+      - Calls the train function and logs results[2] as "mAP50" in ClearML.
     
-    print(f"Initializing ClearML training task for project: {project_name}, task: {task_name}", flush=True)
+    Args:
+        dataset_id: ID of the dataset in ClearML.
+        project_name: Project name for the training task.
+        task_name: Task name.
+        epochs: Number of training epochs.
+        batch_size: Batch size for training.
+        img_size: Image size to use.
+        weights: Path to initial weights.
+        device: Device to run training on (e.g., "0" or "cpu").
+    
+    Returns:
+        base_task_id: The ClearML task ID.
+    """
+    from clearml import Task, Dataset
+    import os
+    import sys
+    import argparse
+    import torch
+    from pathlib import Path
+
+    # Initialize the ClearML task
     task = Task.init(
         project_name=project_name,
         task_name=task_name,
         task_type="training",
         reuse_last_task_id=False
     )
-    
-    print(f"Received Dataset ID: {dataset_id}", flush=True)
-    
-    print("Fetching dataset from ClearML...", flush=True)
-    dataset = Dataset.get(dataset_id=dataset_id)
-    
-    print("Retrieving local copy of dataset...", flush=True)
-    dataset_path = dataset.get_local_copy()
-    print(f"Local dataset path: {dataset_path}", flush=True)
-    
+
+    # Retrieve dataset and get its local copy
+    # dataset = Dataset.get(dataset_id=dataset_id)
+    # dataset_path = dataset.get_local_copy()
+    base_path = "/home/diego/Documents/master/S4/AI_studio/yolov9-clearML"
+    dataset_path = f"{base_path}/yolov9/data/dataset"
+
+    # Connect training parameters for logging
     params = {
-        "Args/epochs": epochs,
-        "Args/batch_size": batch_size,
-        "Args/img_size": img_size,
-        "Args/weights": weights,
-        "Args/device": device,
-        "Args/dataset_path": dataset_path,
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "img_size": img_size,
+        "weights": weights,
+        "dataset_path": dataset_path,
     }
-    print(f"Connecting parameters to the task: {params}", flush=True)
     task.connect(params)
-    
-    print("Closing task...", flush=True)
+
+    # Set up the YOLOv9 training environment
+    yolov9_dir = f"{base_path}/yolov9"
+    print(yolov9_dir)
+    sys.path.append(yolov9_dir)
+
+    # Import training modules from YOLOv9
+    from yolov9.train_dual import train  
+    from yolov9.utils.general import increment_path
+    from yolov9.utils.callbacks import Callbacks
+
+    # Manually create the options namespace (simulating command-line arguments)
+    opt = argparse.Namespace()
+    opt.name = task_name
+    opt.project = project_name  
+    opt.save_dir = str(increment_path(Path(opt.project) / opt.name))  # Where to save results
+    opt.epochs = epochs
+    opt.batch_size = batch_size
+    opt.weights = weights
+    opt.cfg = f"{base_path}/yolov9/models/detect/yolov9-c-fish-od.yaml"  # Model configuration file
+    opt.hyp = f"{base_path}/yolov9/data/hyps/hyp.scratch-high.yaml"         # Hyperparameters file
+    # Assumes the dataset.yaml file is in the dataset directory
+    opt.data = os.path.join(dataset_path, "dataset.yaml")
+    opt.noval = False
+    opt.nosave = False
+    opt.workers = 8
+    opt.freeze = [0]
+    opt.rect = False
+    opt.image_weights = False
+    opt.single_cls = False
+    opt.evolve = False
+    opt.noautoanchor = False
+    opt.noplots = False
+    opt.cos_lr = False
+    opt.flat_cos_lr = False
+    opt.fixed_lr = False
+    opt.label_smoothing = 0.0
+    opt.patience = 100
+    opt.save_period = -1
+    opt.seed = 0
+    opt.resume = False
+    opt.imgsz = img_size
+    opt.optimizer = 'SGD'
+    opt.sync_bn = False
+    opt.cache = None
+    opt.close_mosaic = 15
+    opt.quad = False
+    opt.min_items = 0
+    opt.multi_scale = False
+
+    # Set up the device (using CUDA if available)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Instantiate callbacks if needed
+    callbacks = Callbacks()
+
+    # Change to the YOLOv9 directory for training
+    # original_dir = cwd
+    # os.chdir(yolov9_dir)
+
+    print("Starting training...", flush=True)
+    # Call the train function directly
+    results = train(opt.hyp, opt, device, callbacks)
+    print("Training completed.", flush=True)
+
+    # Return to the original working directory
+    # os.chdir(original_dir)
+
+    # Log the mAP50 (results[2]) as a scalar metric in ClearML
+    mAP50 = results[2]
+    print(f"Logging mAP50: {mAP50}", flush=True)
+    task.get_logger().report_scalar(
+        title="Evaluation Metrics",
+        series="mAP50",
+        value=mAP50,
+        iteration=0
+    )
+
     task.close()
-    
-    base_task_id = task.id
-    print(f"Base training task created successfully with Task ID: {base_task_id}", flush=True)
-    return base_task_id
+
+    # Return the task ID to be used in the HPO process
+    return task.id
 
 
 # Step 5: Get Best Hyperparameters

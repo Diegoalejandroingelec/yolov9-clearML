@@ -15,6 +15,7 @@ from clearml import Task, Dataset, PipelineController
 from clearml.automation import HyperParameterOptimizer
 from clearml.automation.optuna import OptimizerOptuna
 from clearml.automation.parameters import UniformParameterRange, DiscreteParameterRange
+
 import yaml
 
 
@@ -108,7 +109,7 @@ def create_yolov9_pipeline_with_hpo(
         parents=["clone_task_for_hpo", "dataset_versioning"],
         function=create_yolov9_hpo_task,
         function_kwargs=dict(
-            project_name=hpo_project,
+            project_name=base_task_project,
             task_name="YOLOv9-Hyperparameter-Optimization",
             dataset_id="${dataset_versioning.dataset_id}",
             base_task_id="${clone_task_for_hpo.cloned_task_id}",
@@ -127,6 +128,8 @@ def create_yolov9_pipeline_with_hpo(
         function=get_best_hyperparameters,
         function_kwargs=dict(
             optimizer="${hyperparameter_optimization.optimizer}",
+            project_name=base_task_project,
+            task_name="YOLOv9-Get-Best-Hyperparameters",
         ),
         function_return=["best_hyperparameters"],
         cache_executed_step=False,
@@ -183,7 +186,7 @@ def create_yolov9_pipeline_with_hpo(
         ),
         function_return=["deployment_success"],
         cache_executed_step=False,
-        execution_queue=worker_queue,  # Deployment runs in the pipeline queue
+        execution_queue=worker_queue,
     )
 
     # Start the pipeline
@@ -286,18 +289,17 @@ def create_base_training_task(dataset_id,
     return base_task_id
 
 
-
-
-
 # Step 5: Get Best Hyperparameters
-def get_best_hyperparameters(optimizer):
+def get_best_hyperparameters(optimizer,
+                             project_name,
+                             task_name):
     """
     Get the best hyperparameters from the optimizer.
     """
     print("Initializing task for getting best hyperparameters...", flush=True)
     task = Task.init(
-        project_name="YOLOv9-HPO",
-        task_name="Get-Best-Hyperparameters",
+        project_name=project_name,
+        task_name=task_name,
         task_type="data_processing",
         reuse_last_task_id=False
     )
@@ -336,7 +338,6 @@ def get_best_hyperparameters(optimizer):
     task.close()
     
     return best_hyperparameters
-
 
 
 # Step 6: Model Training with Best Hyperparameters
@@ -429,7 +430,6 @@ def train_yolov9_model_with_best_params(dataset_id, project_name, task_name, bes
     os.chdir(cwd)
     
     return trained_model_id
-
 
 
 # Step 7: Model Evaluation Function
@@ -532,7 +532,6 @@ def evaluate_yolov9_model(model_id, project_name, task_name, img_size, batch_siz
     return evaluation_results
 
 
-
 # Step 8: Model Deployment Function
 def deploy_model_if_improved(model_id, evaluation_results, project_name, min_map_threshold=0.5):
     """
@@ -574,8 +573,6 @@ def deploy_model_if_improved(model_id, evaluation_results, project_name, min_map
     return deployment_success
 
 
-
-
 def create_yolov9_hpo_task(
     project_name="YOLOv9-HPO",
     task_name="YOLOv9-Hyperparameter-Optimization",
@@ -585,6 +582,7 @@ def create_yolov9_hpo_task(
     max_concurrent_jobs=2,
     execution_queue="default",
     optimization_time_limit=None,
+    max_iteration_per_job=10,  # New parameter added with a default value
 ):
     """
     Create a hyperparameter optimization task for YOLOv9
@@ -598,46 +596,39 @@ def create_yolov9_hpo_task(
         max_concurrent_jobs: Maximum number of concurrent jobs
         execution_queue: Queue to use for execution
         optimization_time_limit: Time limit for optimization in minutes
+        max_iteration_per_job: Maximum number of iterations each job will run
         
     Returns:
         optimizer: The hyperparameter optimizer
     """
-    # Create the base task for hyperparameter optimization
+    print("Initializing hyperparameter optimization task...", flush=True)
     task = Task.init(
         project_name=project_name,
         task_name=task_name,
         task_type="optimizer",
         reuse_last_task_id=False
     )
+    print(f"Optimizer task initialized with ID: {task.id}", flush=True)
     
-    # Get the base task to optimize
     if not base_task_id:
         raise ValueError("base_task_id must be provided")
+    print(f"Base task ID for optimization: {base_task_id}", flush=True)
     
-    # Configure the hyperparameter optimization
+    print("Configuring hyperparameter optimization with the following parameters:", flush=True)
+    print(f"Total max jobs: {total_max_jobs}", flush=True)
+    print(f"Max concurrent jobs: {max_concurrent_jobs}", flush=True)
+    print(f"Execution queue: {execution_queue}", flush=True)
+    print(f"Optimization time limit: {optimization_time_limit}", flush=True)
+    print(f"Max iterations per job: {max_iteration_per_job}", flush=True)
+    
     optimizer = HyperParameterOptimizer(
         base_task_id=base_task_id,
         hyper_parameters=[
-            # Learning rate
-            UniformParameterRange(
-                "Args/lr0", min_value=1e-5, max_value=1e-2, step_size=1e-5
-            ),
-            # Batch size
-            DiscreteParameterRange(
-                "Args/batch_size", values=[8, 16, 32, 64]
-            ),
-            # Image size
-            DiscreteParameterRange(
-                "Args/img_size", values=[416, 512, 640, 768]
-            ),
-            # Weight decay
-            UniformParameterRange(
-                "Args/weight_decay", min_value=1e-5, max_value=1e-2, step_size=1e-5
-            ),
-            # Momentum
-            UniformParameterRange(
-                "Args/momentum", min_value=0.8, max_value=0.99, step_size=0.01
-            ),
+            UniformParameterRange("Args/lr0", min_value=1e-5, max_value=1e-2, step_size=1e-5),
+            DiscreteParameterRange("Args/batch_size", values=[8, 16, 32, 64]),
+            DiscreteParameterRange("Args/img_size", values=[416, 512, 640, 768]),
+            UniformParameterRange("Args/weight_decay", min_value=1e-5, max_value=1e-2, step_size=1e-5),
+            UniformParameterRange("Args/momentum", min_value=0.8, max_value=0.99, step_size=0.01),
         ],
         objective_metric_title="metrics",
         objective_metric_series="mAP_0.5",
@@ -648,53 +639,73 @@ def create_yolov9_hpo_task(
         total_max_jobs=total_max_jobs,
         optimization_time_limit=optimization_time_limit,
         save_top_k_tasks_only=5,  # Save only the top 5 tasks
+        max_iteration_per_job=max_iteration_per_job,  # Provide the missing parameter
     )
+    print("Hyperparameter optimizer configured.", flush=True)
     
-    # If we have a dataset ID, we need to connect it to all the tasks
-    if dataset_id:
-        optimizer.set_task_parameters(
-            name="dataset_id",
-            value=dataset_id,
-        )
+    # if dataset_id:
+    #     print(f"Setting dataset_id parameter: {dataset_id}", flush=True)
+    #     optimizer.set_task_parameters(
+    #         name="dataset_id",
+    #         value=dataset_id,
+    #     )
     
-    # Start the optimization
+    print("Starting hyperparameter optimization...", flush=True)
     optimizer.start()
+    print("Hyperparameter optimization started successfully.", flush=True)
     
-    # Return the optimizer for reference
     return optimizer
+
 
 
 def clone_task_for_hpo(
     base_task_id,
-    project_name="YOLOv9-HPO",
-    task_name="YOLOv9-Base-Task-for-HPO",
+    project_name,
+    task_name
 ):
     """
-    Clone a task for hyperparameter optimization
-    
+    Clone a task for hyperparameter optimization.
+
     Args:
-        base_task_id: ID of the base task to clone
-        project_name: Name of the project
-        task_name: Name of the task
+        base_task_id: ID of the base task to clone.
+        project_name: project name where the cloned task should be created.
+        task_name: Name of the cloned task.
         
     Returns:
-        cloned_task_id: ID of the cloned task
+        cloned_task_id: ID of the cloned task.
     """
-    # Get the base task
-    base_task = Task.get_task(task_id=base_task_id)
+
+    def get_or_create_project_id(project_name):
+        """
+        Create a temporary task with the given project name to get its project id.
+        This will auto-create the project if it doesn't exist.
+        """
+        # Create a temporary task. This will cause ClearML to create the project if needed.
+        temp_task = Task.init(
+            project_name=project_name,
+            task_name="Temporary Project Lookup",
+            task_type="data_processing",
+            reuse_last_task_id=False
+        )
+        project_id = temp_task.get_project_id(project_name)
+        print(f"Using project '{project_name}' with id: {project_id}", flush=True)
+        temp_task.close()
+        return project_id
+
+    project_id = get_or_create_project_id(project_name)
     
-    # Clone the task
+    print(f"Base task ID: {base_task_id}", flush=True)
+    print(f"Project ID: {project_id}", flush=True)
+    print(f"Task name: {task_name}", flush=True)
+    
+    base_task = Task.get_task(task_id=base_task_id)
     cloned_task = Task.clone(
         source_task=base_task,
         name=task_name,
-        project=project_name,
+        project=project_id,
     )
-    
-    # Modify the cloned task to make it suitable for HPO
-    # For example, reduce the number of epochs for faster iterations
+    # For faster iterations during HPO, we reduce the epochs.
     cloned_task.set_parameter("Args/epochs", 10)
-    
-    # Close the task to save the changes
     cloned_task.close()
     
     return cloned_task.id

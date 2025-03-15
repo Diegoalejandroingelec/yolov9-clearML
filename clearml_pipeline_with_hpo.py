@@ -78,7 +78,7 @@ def create_yolov9_pipeline_with_hpo(
             project_name=base_task_project,
             task_name="YOLOv9-Base-Training",
             epochs=5,
-            batch_size=16,
+            batch_size=4,
             img_size=640,
             weights="yolov9-c-converted.pt",
             device="0",
@@ -165,7 +165,7 @@ def create_yolov9_pipeline_with_hpo(
             project_name=base_task_project,
             task_name="YOLOv9-Evaluation",
             img_size=640,
-            batch_size=16,
+            batch_size=4,
             device="0",
         ),
         function_return=["evaluation_results"],
@@ -360,7 +360,7 @@ def train_yolov9_model_with_best_params(dataset_id, project_name, task_name, bes
     print(f"Dataset local path: {dataset_path}", flush=True)
     
     lr0 = best_hyperparameters.get("lr0", 0.01)
-    batch_size = best_hyperparameters.get("batch_size", 16)
+    batch_size = best_hyperparameters.get("batch_size", 4)
     img_size = best_hyperparameters.get("img_size", 640)
     weight_decay = best_hyperparameters.get("weight_decay", 0.0005)
     momentum = best_hyperparameters.get("momentum", 0.937)
@@ -625,7 +625,7 @@ def create_yolov9_hpo_task(
         base_task_id=base_task_id,
         hyper_parameters=[
             UniformParameterRange("Args/lr0", min_value=1e-5, max_value=1e-2, step_size=1e-5),
-            DiscreteParameterRange("Args/batch_size", values=[8, 16, 32, 64]),
+            DiscreteParameterRange("Args/batch_size", values=[1, 2, 4, 8]),
             DiscreteParameterRange("Args/img_size", values=[416, 512, 640, 768]),
             UniformParameterRange("Args/weight_decay", min_value=1e-5, max_value=1e-2, step_size=1e-5),
             UniformParameterRange("Args/momentum", min_value=0.8, max_value=0.99, step_size=0.01),
